@@ -58,15 +58,15 @@ class LLMAnalyzer:
     # Gemini OpenAI 兼容 API 配置
     GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
     GEMINI_MODELS = {
-        "fast": "gemini-2.0-flash-lite",
-        "balanced": "gemini-2.0-flash",
-        "pro": "gemini-2.5-pro-preview-05-06"
+        "fast": "gemini-3-flash-preview",
+        "balanced": "gemini-3-flash-preview",
+        "pro": "gemini-3-pro-preview"
     }
 
     def __init__(
         self,
         api_key: str = None,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-3-flash-preview",
         base_url: str = None,
         timeout: int = 30
     ):
@@ -699,7 +699,7 @@ class LLMAnalyzer:
 
 def create_analyzer(
     api_key: str = None,
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-3-flash-preview"
 ) -> LLMAnalyzer:
     """
     创建 LLM 分析器的便捷函数
@@ -749,8 +749,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="gemini-2.0-flash",
-        help="使用的模型 (默认: gemini-2.0-flash)"
+        default="gemini-3-flash-preview",
+        help="使用的模型 (默认: gemini-3-flash-preview)"
     )
     parser.add_argument(
         "--api-key",

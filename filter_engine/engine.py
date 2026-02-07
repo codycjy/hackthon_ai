@@ -190,7 +190,7 @@ class CommentFilterEngine:
                 logger.warning("No LLM API key configured, LLM analyzer disabled.")
                 return None
             
-            model = getattr(self.config, 'llm_model', 'gemini-2.0-flash')
+            model = getattr(self.config, 'llm_model', 'gemini-3-flash-preview')
             self._llm_analyzer = LLMAnalyzer(api_key=api_key, model=model)
             logger.info("LLM analyzer initialized successfully.")
         except Exception as e:

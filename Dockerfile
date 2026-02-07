@@ -16,4 +16,4 @@ ENV GEMINI_API_KEY=""
 
 EXPOSE 5000
 
-CMD ["python", "-m", "api.main"]
+CMD ["gunicorn", "api.main:app", "-w", "4", "-b", "0.0.0.0:5000", "--timeout", "60"]
