@@ -37,6 +37,11 @@ engine = create_engine(
     )
 logger.info("Filter engine initialized successfully.")
 
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok"})
+
+
 @app.route("/filter", methods=["POST"])
 def filter_comment():
     """
