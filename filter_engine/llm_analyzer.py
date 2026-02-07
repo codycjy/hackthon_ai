@@ -205,7 +205,7 @@ class LLMAnalyzer:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.3,
+            reasoning_effort="minimal",
             max_tokens=512,
             response_format={"type": "json_object"}
         )
