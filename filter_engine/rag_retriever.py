@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 import numpy as np
 import logging
+import time
 import os
 import faiss
 
@@ -187,13 +188,17 @@ class RAGRetriever:
     
     def retrieve(self, text: str, top_k: int = 5) -> RAGResult:
         """检索相似案例"""
+        start_time = time.time()
+        logger.debug(f"RAG retrieve: text={text[:60]}{'...' if len(text) > 60 else ''} top_k={top_k}")
         self._lazy_init()
-        
+
         import faiss
-        
+
         # 编码查询文本
+        encode_start = time.time()
         query_embedding = self._encode([text])
         faiss.normalize_L2(query_embedding)
+        logger.debug(f"RAG encode in {time.time() - encode_start:.3f}s")
         
         # 搜索
         scores, indices = self._index.search(query_embedding, top_k)
@@ -223,18 +228,23 @@ class RAGRetriever:
             category_votes[cat] = category_votes.get(cat, 0) + weight
             total_weight += weight
         
+        elapsed = time.time() - start_time
+
         if not category_votes:
+            logger.info(f"RAG retrieve done in {elapsed:.3f}s | no similar cases found")
             return RAGResult(
                 similar_cases=[],
                 suggested_category=None,
                 confidence=0.0,
                 reasoning="No sufficiently similar cases found"
             )
-        
+
         # 选择得票最高的类别
         best_category = max(category_votes, key=category_votes.get)
         confidence = category_votes[best_category] / total_weight if total_weight > 0 else 0
-        
+
+        logger.info(f"RAG retrieve done in {elapsed:.3f}s | category={best_category.value} confidence={confidence:.2f} cases={len(similar_cases)} top_sim={similar_cases[0]['similarity']:.3f}")
+
         return RAGResult(
             similar_cases=similar_cases,
             suggested_category=best_category,

@@ -16,6 +16,8 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 import logging
 import json
+import os
+import time
 
 from config.settings import CommentCategory, FilterConfig, FilterStrictness
 from preprocessor.text_cleaner import TextCleaner
@@ -182,13 +184,13 @@ class CommentFilterEngine:
         logger.info("Initializing LLM analyzer...")
         try:
             api_key = getattr(self.config, 'llm_api_key', None) or \
-                      getattr(self.config, 'moonshot_api_key', None)
+                      getattr(self.config, 'gemini_api_key', None)
             
             if not api_key:
                 logger.warning("No LLM API key configured, LLM analyzer disabled.")
                 return None
             
-            model = getattr(self.config, 'llm_model', 'moonshot-v1-8k')
+            model = getattr(self.config, 'llm_model', 'gemini-2.0-flash')
             self._llm_analyzer = LLMAnalyzer(api_key=api_key, model=model)
             logger.info("LLM analyzer initialized successfully.")
         except Exception as e:
@@ -238,12 +240,18 @@ class CommentFilterEngine:
         use_rag = enable_rag if enable_rag is not None else getattr(self.config, 'enable_rag', False)
         use_llm = enable_llm if enable_llm is not None else getattr(self.config, 'enable_llm_deep_analysis', False)
 
-        
+        pipeline_start = time.time()
+        logger.info(f"[{comment_id}] Start filter pipeline | rag={use_rag} llm={use_llm} text={text[:60]}{'...' if len(text) > 60 else ''}")
+
         # ==================== 1. 预处理 ====================
+        step_start = time.time()
         cleaned_text, metadata, features = self._preprocess(text)
-        
+        logger.debug(f"[{comment_id}] Preprocess done in {time.time() - step_start:.3f}s")
+
         # ==================== 2. 规则引擎快速过滤 ====================
+        step_start = time.time()
         rule_result = self.rule_engine.apply_rules(cleaned_text, features)
+        logger.debug(f"[{comment_id}] Rule engine done in {time.time() - step_start:.3f}s | matched={rule_result.matched} rules={rule_result.matched_rules}")
         
         # 高置信度规则匹配直接返回（威胁/诈骗快速通道）
         # if rule_result.matched and rule_result.confidence >= 0.9:
@@ -265,19 +273,28 @@ class CommentFilterEngine:
         #         )
         
         # ==================== 3. ML 分类 (Detoxify) ====================
+        step_start = time.time()
         ml_result = self.classifier.classify(cleaned_text, features)
-        
+        logger.debug(f"[{comment_id}] ML classify done in {time.time() - step_start:.3f}s | category={ml_result.category.value} confidence={ml_result.confidence:.2f}")
+
         # ==================== 4. RAG 检索（可选） ====================
         rag_result: Optional[RAGResult] = None
         if use_rag:
+            step_start = time.time()
             rag_retriever = self._get_rag_retriever()
             if rag_retriever is not None:
                 try:
                     rag_result = rag_retriever.retrieve(cleaned_text)
+                    rag_cat = rag_result.suggested_category.value if rag_result.suggested_category else "none"
+                    logger.debug(f"[{comment_id}] RAG retrieve done in {time.time() - step_start:.3f}s | category={rag_cat} confidence={rag_result.confidence:.2f} cases={len(rag_result.similar_cases)}")
                 except Exception as e:
-                    logger.warning(f"RAG retrieval failed: {e}")
+                    logger.warning(f"[{comment_id}] RAG retrieval failed in {time.time() - step_start:.3f}s: {e}")
                     rag_result = None
-        
+            else:
+                logger.debug(f"[{comment_id}] RAG retriever not available, skipping")
+        else:
+            logger.debug(f"[{comment_id}] RAG disabled, skipping")
+
         # ==================== 5. LLM 深度分析（可选） ====================
         llm_result: Optional[LLMAnalysisResult] = None
         if use_llm:
@@ -289,8 +306,8 @@ class CommentFilterEngine:
             # )
             
             if use_llm:
+                step_start = time.time()
                 llm_analyzer = self._get_llm_analyzer()
-                print(llm_analyzer)
                 if llm_analyzer is not None:
                     try:
                         # 准备传递给 LLM 的数据
@@ -328,10 +345,15 @@ class CommentFilterEngine:
                             rag_result=rag_data
                         )
                     except Exception as e:
-                        logger.warning(f"LLM analysis failed: {e}")
+                        logger.warning(f"[{comment_id}] LLM analysis failed in {time.time() - step_start:.3f}s: {e}")
                         llm_result = None
-        
+                else:
+                    logger.debug(f"[{comment_id}] LLM analyzer not available, skipping")
+        else:
+            logger.debug(f"[{comment_id}] LLM disabled, skipping")
+
         # ==================== 6. 综合决策 ====================
+        step_start = time.time()
         final_result = self._make_decision(
             comment_id=comment_id,
             text=text,
@@ -341,7 +363,14 @@ class CommentFilterEngine:
             rag_result=rag_result,
             llm_result=llm_result
         )
-        
+        pipeline_elapsed = time.time() - pipeline_start
+        logger.info(
+            f"[{comment_id}] Pipeline complete in {pipeline_elapsed:.3f}s | "
+            f"category={final_result.category.value} confidence={final_result.confidence:.2f} "
+            f"action={final_result.action} severity={final_result.severity} "
+            f"exempted={final_result.is_exempted} path={final_result.processing_path}"
+        )
+
         return final_result
     
     def filter_batch(
@@ -430,7 +459,8 @@ class CommentFilterEngine:
             is_exempted = llm_result.is_exempted
             severity = llm_result.severity
             processing_path = "rule+ml+rag+llm" if rag_result else "rule+ml+llm"
-        
+            logger.debug(f"[{comment_id}] Decision: using LLM result -> {category.value} ({confidence:.2f})")
+
         else:
             # ==================== 综合 ML 和 RAG 结果 ====================
             ml_category = ml_result.category
@@ -465,12 +495,15 @@ class CommentFilterEngine:
                 category = ml_category
                 confidence = ml_confidence
                 processing_path = "rule+ml_default"
-            
+
+            logger.debug(f"[{comment_id}] Decision path: {processing_path} | ml={ml_category.value}({ml_confidence:.2f}) rag={rag_category.value if rag_category else 'N/A'}({rag_confidence:.2f})")
+
             # 检查豁免
             is_exempted = self._check_exemption(category, features, ml_result)
             if is_exempted:
+                logger.debug(f"[{comment_id}] Exemption granted: {category.value} -> safe")
                 category = CommentCategory.SAFE
-            
+
             # 评估严重程度
             severity = self._assess_severity(category)
         
@@ -882,7 +915,7 @@ def main():
     )
 
     # 获取 LLM API Key（命令行参数优先，其次环境变量）
-    llm_api_key = "sk-gF7hiU9IuKttaT2Q77YovdVUaXwENXNK3cNtWVneIrRjDIqU"
+    llm_api_key = args.llm_api_key or os.getenv("GEMINI_API_KEY")
     
     # 使用 create_engine 创建引擎
     engine = create_engine(

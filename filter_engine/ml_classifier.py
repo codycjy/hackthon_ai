@@ -1,10 +1,14 @@
 # filter_engine/ml_classifier.py
 from typing import Dict, List, Optional
 from dataclasses import dataclass
+import logging
+import time
 import numpy as np
 from config.settings import CommentCategory
 
 from detoxify import Detoxify
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ClassificationResult:
@@ -42,9 +46,10 @@ class LightweightClassifier:
         self.device = device
         
         # 加载Detoxify模型
-        print(f"Loading Detoxify model: {model_type}...")
+        logger.info(f"Loading Detoxify model: {model_type} on {device}...")
+        load_start = time.time()
         self.model = Detoxify(model_type, device=device)
-        print("Detoxify model loaded successfully.")
+        logger.info(f"Detoxify model loaded in {time.time() - load_start:.2f}s")
         
         # Detoxify标签到自定义类别的映射
         self.label_mapping = {
@@ -69,43 +74,55 @@ class LightweightClassifier:
     def classify(self, text: str, features: Dict) -> ClassificationResult:
         """
         使用Detoxify分类评论
-        
+
         Args:
             text: 待分类文本
             features: 预处理提取的特征（用于辅助判断）
-        
+
         Returns:
             ClassificationResult: 分类结果
         """
+        start_time = time.time()
+        logger.debug(f"ML classify: text={text[:60]}{'...' if len(text) > 60 else ''}")
+
         # 获取Detoxify预测结果
         detoxify_results = self.model.predict(text)
-        
+        predict_elapsed = time.time() - start_time
+        logger.debug(f"Detoxify predict in {predict_elapsed:.3f}s | toxicity={detoxify_results.get('toxicity', 0):.4f} severe={detoxify_results.get('severe_toxicity', 0):.4f} threat={detoxify_results.get('threat', 0):.4f} insult={detoxify_results.get('insult', 0):.4f} identity_attack={detoxify_results.get('identity_attack', 0):.4f}")
+
         # 转换为自定义类别得分
         category_scores = self._convert_to_category_scores(detoxify_results, features)
-        
+
         # 找到最高分类别
         best_category = max(category_scores, key=category_scores.get)
         best_score = category_scores[best_category]
-        
+
         # 计算归一化置信度
         total_score = sum(category_scores.values())
         if total_score > 0:
             confidence = best_score / total_score
         else:
             confidence = 0.0
-        
+
         # 应用豁免逻辑降低置信度
         if features.get("exemption_matches"):
             if best_category != CommentCategory.THREAT:
+                original_confidence = confidence
                 confidence *= 0.6
+                logger.debug(f"Exemption applied: confidence {original_confidence:.2f} -> {confidence:.2f}")
                 # 如果有豁免匹配且置信度降低后较低，考虑判为SAFE
                 if confidence < 0.4:
+                    logger.debug(f"Low confidence after exemption, overriding category {best_category.value} -> safe")
                     best_category = CommentCategory.SAFE
                     best_score = 1 - detoxify_results.get('toxicity', 0)
-        
+
+        final_confidence = min(confidence * 1.3, 0.99)
+        elapsed = time.time() - start_time
+        logger.info(f"ML classify done in {elapsed:.3f}s | category={best_category.value} confidence={final_confidence:.2f}")
+
         return ClassificationResult(
             category=best_category,
-            confidence=min(confidence * 1.3, 0.99),  # 轻微放大并限制上限
+            confidence=final_confidence,
             all_scores=category_scores,
             detoxify_raw=detoxify_results
         )

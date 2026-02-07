@@ -1,7 +1,10 @@
 # filter_engine/rule_engine.py
+import logging
 from typing import Dict, Tuple, Optional
 from dataclasses import dataclass
 from config.settings import CommentCategory, FilterStrictness, TOXIC_KEYWORDS
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class RuleResult:
@@ -84,46 +87,51 @@ class RuleEngine:
         matched_rules = []
         highest_confidence = 0.0
         matched_category = None
-        
+
         for rule in self.rules:
             is_match = False
-            
+
             # 文本模式匹配
             if "patterns" in rule:
                 for pattern in rule["patterns"]:
                     if pattern.lower() in text_lower:
                         is_match = True
                         break
-            
+
             # Emoji模式匹配
             if "emoji_patterns" in rule:
                 for pattern in rule["emoji_patterns"]:
                     if pattern in text:
                         is_match = True
                         break
-            
+
             # 特征条件匹配
             if "feature_conditions" in rule:
                 conditions_met = all(
-                    features.get(k) == v 
+                    features.get(k) == v
                     for k, v in rule["feature_conditions"].items()
                 )
                 if conditions_met:
                     is_match = True
-            
+
             if is_match:
                 matched_rules.append(rule["name"])
+                logger.debug(f"Rule matched: {rule['name']} -> {rule['category'].value} (confidence={rule['confidence']})")
                 if rule["confidence"] > highest_confidence:
                     highest_confidence = rule["confidence"]
                     matched_category = rule["category"]
-        
+
         # 检查豁免条件
         if features.get("exemption_matches") and matched_category not in [
             CommentCategory.THREAT, CommentCategory.SCAM_SPAM
         ]:
-            # 有豁免模式匹配，降低置信度
+            original_confidence = highest_confidence
             highest_confidence *= 0.5
-        
+            logger.debug(f"Rule exemption applied: confidence {original_confidence:.2f} -> {highest_confidence:.2f}")
+
+        cat_value = matched_category.value if matched_category else "none"
+        logger.info(f"Rule engine: matched={len(matched_rules) > 0} rules={matched_rules} category={cat_value} confidence={highest_confidence:.2f}")
+
         return RuleResult(
             matched=len(matched_rules) > 0,
             category=matched_category,

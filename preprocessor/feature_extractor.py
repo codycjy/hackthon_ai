@@ -1,6 +1,8 @@
-
+import logging
 from typing import Dict, List, Any
 from config.settings import TOXIC_EMOJIS, TOXIC_KEYWORDS, EXEMPTION_PATTERNS
+
+logger = logging.getLogger(__name__)
 
 class FeatureExtractor:
     """特征提取器"""
@@ -14,27 +16,35 @@ class FeatureExtractor:
             # 基础特征
             "text_length": len(text),
             "word_count": len(text.split()),
-            
+
             # Emoji特征
             "emoji_count": len(metadata.get("emojis", [])),
             "toxic_emoji_count": self._count_toxic_emojis(metadata.get("emojis", [])),
             "toxic_emojis": self._get_toxic_emojis(metadata.get("emojis", [])),
-            
+
             # 社交特征
             "mention_count": len(metadata.get("mentions", [])),
             "hashtag_count": len(metadata.get("hashtags", [])),
             "has_url": len(metadata.get("urls", [])) > 0,
-            
+
             # 关键词特征
             "keyword_matches": self._match_keywords(text),
             "exemption_matches": self._match_exemptions(text),
-            
+
             # 模式特征
             "has_caps_abuse": self._detect_caps_abuse(metadata.get("original", text)),
             "repetition_score": self._calculate_repetition(text),
             "is_mention_bomb": len(metadata.get("mentions", [])) > 3
         }
-        
+
+        keyword_cats = list(features["keyword_matches"].keys()) if features["keyword_matches"] else []
+        logger.debug(
+            f"Features extracted: length={features['text_length']} words={features['word_count']} "
+            f"toxic_emoji={features['toxic_emoji_count']} keyword_cats={keyword_cats} "
+            f"exemptions={features['exemption_matches']} caps_abuse={features['has_caps_abuse']} "
+            f"repetition={features['repetition_score']:.2f}"
+        )
+
         return features
     
     def _count_toxic_emojis(self, emojis: List[str]) -> int:

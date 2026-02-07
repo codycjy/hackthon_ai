@@ -2,13 +2,13 @@
 """
 LLM 深度分析器
 
-使用 Kimi (Moonshot AI) API 进行深度语义理解
+使用 Gemini API (OpenAI 兼容接口) 进行深度语义理解
 包含降级方案（当 API 不可用时使用规则分析）
 
 用法:
     from filter_engine.llm_analyzer import LLMAnalyzer
-    
-    analyzer = LLMAnalyzer(api_key="your-moonshot-api-key")
+
+    analyzer = LLMAnalyzer(api_key="your-gemini-api-key")
     result = analyzer.analyze(text, features)
 """
 
@@ -18,11 +18,11 @@ import json
 import logging
 import os
 import re
+import time
 
 from config.settings import CommentCategory
 
 logger = logging.getLogger(__name__)
-api_key = "sk-gF7hiU9IuKttaT2Q77YovdVUaXwENXNK3cNtWVneIrRjDIqU"
 
 
 @dataclass
@@ -51,41 +51,40 @@ class CyberbullyingReport:
 class LLMAnalyzer:
     """
     LLM 深度分析器
-    
-    使用 Kimi (Moonshot AI) API 进行深度语义理解
 
+    使用 Gemini API (OpenAI 兼容接口) 进行深度语义理解
     """
-    
-    # Kimi API 配置
-    KIMI_BASE_URL = "https://api.moonshot.cn/v1"
-    KIMI_MODELS = {
-        "fast": "moonshot-v1-8k",      # 快速，适合短文本
-        "balanced": "kimi-k2-turbo-preview",  # 平衡
-        "long": "moonshot-v1-128k"      # 长上下文
+
+    # Gemini OpenAI 兼容 API 配置
+    GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    GEMINI_MODELS = {
+        "fast": "gemini-2.0-flash-lite",
+        "balanced": "gemini-2.0-flash",
+        "pro": "gemini-2.5-pro-preview-05-06"
     }
-    
+
     def __init__(
-        self, 
-        api_key: str = "sk-gF7hiU9IuKttaT2Q77YovdVUaXwENXNK3cNtWVneIrRjDIqU", 
-        model: str = "kimi-k2-turbo-preview",
+        self,
+        api_key: str = None,
+        model: str = "gemini-2.0-flash",
         base_url: str = None,
         timeout: int = 30
     ):
         """
         初始化 LLM 分析器
-        
+
         Args:
-            api_key: Moonshot API Key，也可通过环境变量 MOONSHOT_API_KEY 设置
-            model: Kimi 模型名称，可选:
-                   - moonshot-v1-8k (快速，推荐用于评论分析)
-                   - moonshot-v1-32k (平衡)
-                   - moonshot-v1-128k (长上下文)
-            base_url: API 基础地址，默认为 Kimi 官方地址
+            api_key: Gemini API Key，也可通过环境变量 GEMINI_API_KEY 设置
+            model: Gemini 模型名称，可选:
+                   - gemini-2.0-flash-lite (快速)
+                   - gemini-2.0-flash (平衡，推荐)
+                   - gemini-2.5-pro-preview-05-06 (最强)
+            base_url: API 基础地址，默认为 Gemini 官方地址
             timeout: 请求超时时间（秒）
         """
-        self.api_key = api_key or os.getenv("MOONSHOT_API_KEY") or os.getenv("KIMI_API_KEY")
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.model = model
-        self.base_url = base_url or self.KIMI_BASE_URL
+        self.base_url = base_url or self.GEMINI_BASE_URL
         self.timeout = timeout
         
         self._client = None
@@ -105,37 +104,36 @@ class LLMAnalyzer:
         ]
     
     def _lazy_init(self):
-        """懒加载 Kimi 客户端"""
+        """懒加载 Gemini 客户端"""
         if self._initialized:
             return
-        
+
         if not self.api_key:
             logger.warning(
-                "未提供 Moonshot API key，LLM 分析将使用降级模式。"
-                "请设置环境变量 MOONSHOT_API_KEY 或在初始化时传入 api_key"
+                "未提供 Gemini API key，LLM 分析将使用降级模式。"
+                "请设置环境变量 GEMINI_API_KEY 或在初始化时传入 api_key"
             )
             self._initialized = True
             return
-        
+
         try:
-            # 使用 OpenAI 兼容客户端（Kimi 兼容 OpenAI API 格式）
             from openai import OpenAI
-            
+
             self._client = OpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
                 timeout=self.timeout
             )
-            logger.info(f"Kimi 客户端初始化成功，模型: {self.model}")
-            
+            logger.info(f"Gemini 客户端初始化成功，模型: {self.model}")
+
         except ImportError:
             logger.warning(
                 "openai 包未安装，使用降级模式。"
                 "请安装: pip install openai"
             )
         except Exception as e:
-            logger.warning(f"Kimi 客户端初始化失败: {e}，使用降级模式")
-        
+            logger.warning(f"Gemini 客户端初始化失败: {e}，使用降级模式")
+
         self._initialized = True
     
     def analyze(
@@ -160,45 +158,67 @@ class LLMAnalyzer:
             LLMAnalysisResult
         """
         self._lazy_init()
-        
-        # 尝试使用 Kimi API
+        start_time = time.time()
+        logger.info(f"LLM analyze: text={text[:60]}{'...' if len(text) > 60 else ''}")
+
+        # 尝试使用 Gemini API
         if self._client:
             try:
-                return self._analyze_with_kimi(text, features, ml_result, rag_result)
+                result = self._analyze_with_llm(text, features, ml_result, rag_result)
+                elapsed = time.time() - start_time
+                logger.info(
+                    f"LLM analyze done in {elapsed:.3f}s | "
+                    f"category={result.category.value} confidence={result.confidence:.2f} "
+                    f"intent={result.intent} exempted={result.is_exempted} severity={result.severity}"
+                )
+                return result
             except Exception as e:
-                logger.warning(f"Kimi API 调用失败: {e}，使用降级分析")
-        
+                elapsed = time.time() - start_time
+                logger.warning(f"Gemini API 调用失败 ({elapsed:.3f}s): {e}，使用降级分析")
+
         # 降级：使用规则分析
-        return self._analyze_fallback(text, features, ml_result, rag_result)
+        result = self._analyze_fallback(text, features, ml_result, rag_result)
+        elapsed = time.time() - start_time
+        logger.info(f"LLM fallback done in {elapsed:.3f}s | category={result.category.value} confidence={result.confidence:.2f} intent={result.intent}")
+        return result
     
-    def _analyze_with_kimi(
+    def _analyze_with_llm(
         self,
         text: str,
         features: Dict,
         ml_result: Dict,
         rag_result: Dict
     ) -> LLMAnalysisResult:
-        """使用 Kimi API 分析"""
-        
+        """使用 Gemini API 分析"""
+
         # 构建 prompt
         system_prompt = self._build_system_prompt()
         user_prompt = self._build_analysis_prompt(text, features, ml_result, rag_result)
-        
-        # 调用 Kimi API
+
+        logger.debug(f"Calling Gemini API: model={self.model} base_url={self.base_url}")
+        api_start = time.time()
+
+        # 调用 Gemini API
         response = self._client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.3,  # 低温度，更稳定的输出
+            temperature=0.3,
             max_tokens=512,
-            response_format={"type": "json_object"}  # 强制 JSON 输出
+            response_format={"type": "json_object"}
         )
-        
-        # 解析响应
+
+        api_elapsed = time.time() - api_start
         response_text = response.choices[0].message.content
-        return self._parse_kimi_response(response_text, text)
+        usage = getattr(response, 'usage', None)
+        tokens_info = f"prompt={usage.prompt_tokens} completion={usage.completion_tokens}" if usage else "N/A"
+        logger.info(f"Gemini API response in {api_elapsed:.3f}s | tokens: {tokens_info}")
+        logger.debug(f"Gemini raw response: {response_text[:300]}")
+
+        # 解析响应
+        return self._parse_llm_response(response_text, text)
     
     def _build_system_prompt(self) -> str:
         """构建系统提示词"""
@@ -278,8 +298,8 @@ class LLMAnalyzer:
         
         return prompt
     
-    def _parse_kimi_response(self, response: str, original_text: str) -> LLMAnalysisResult:
-        """解析 Kimi 响应"""
+    def _parse_llm_response(self, response: str, original_text: str) -> LLMAnalysisResult:
+        """解析 LLM 响应"""
         try:
             # 尝试直接解析 JSON
             try:
@@ -310,13 +330,13 @@ class LLMAnalyzer:
                 confidence=min(max(confidence, 0.0), 1.0),  # 确保在 [0, 1] 范围
                 intent=data.get("intent", "neutral"),
                 is_exempted=is_exempted,
-                reasoning=data.get("reasoning", "Kimi 分析"),
+                reasoning=data.get("reasoning", "Gemini 分析"),
                 severity=severity,
                 suggested_action=self._get_action(category, severity, is_exempted)
             )
             
         except Exception as e:
-            logger.warning(f"解析 Kimi 响应失败: {e}，响应内容: {response[:200]}")
+            logger.warning(f"解析 LLM 响应失败: {e}，响应内容: {response[:200]}")
             return self._analyze_fallback(original_text, {}, {}, {})
     
     def _analyze_fallback(
@@ -679,15 +699,15 @@ class LLMAnalyzer:
 
 def create_analyzer(
     api_key: str = None,
-    model: str = "moonshot-v1-8k"
+    model: str = "gemini-2.0-flash"
 ) -> LLMAnalyzer:
     """
     创建 LLM 分析器的便捷函数
-    
+
     Args:
-        api_key: Moonshot API Key
+        api_key: Gemini API Key
         model: 模型名称
-        
+
     Returns:
         LLMAnalyzer 实例
     """
@@ -729,13 +749,13 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="moonshot-v1-8k",
-        help="使用的模型 (默认: moonshot-v1-8k)"
+        default="gemini-2.0-flash",
+        help="使用的模型 (默认: gemini-2.0-flash)"
     )
     parser.add_argument(
         "--api-key",
         type=str,
-        help="Moonshot API Key (也可通过环境变量 MOONSHOT_API_KEY 设置)"
+        help="Gemini API Key (也可通过环境变量 GEMINI_API_KEY 设置)"
     )
     
     args = parser.parse_args()
@@ -748,7 +768,7 @@ def main():
     
     # 创建分析器
     analyzer = LLMAnalyzer(
-        api_key=api_key,
+        api_key=args.api_key,
         model=args.model
     )
     

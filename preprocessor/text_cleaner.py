@@ -1,7 +1,10 @@
 # preprocessor/text_cleaner.py
 import re
+import logging
 from typing import List, Dict, Tuple
 import unicodedata
+
+logger = logging.getLogger(__name__)
 
 class TextCleaner:
     
@@ -39,6 +42,8 @@ class TextCleaner:
     
     def extract_clean_text(self, text: str) -> Tuple[str, Dict]:
         """提取并返回清洗后的文本和提取的元数据"""
+        logger.debug(f"Cleaning text: {text[:80]}{'...' if len(text) > 80 else ''}")
+
         metadata = {
             "original": text,
             "mentions": [],
@@ -46,16 +51,16 @@ class TextCleaner:
             "urls": [],
             "emojis": []
         }
-        
+
         # 提取@提及
         metadata["mentions"] = re.findall(r'@[\w]+', text)
-        
+
         # 提取hashtags
         metadata["hashtags"] = re.findall(r'#[\w]+', text)
-        
+
         # 提取URLs
         metadata["urls"] = re.findall(r'https?://\S+', text)
-        
+
         # 提取emojis
         emoji_pattern = re.compile(
             "["
@@ -66,15 +71,20 @@ class TextCleaner:
             "\U00002702-\U000027B0"
             "\U0001f926-\U0001f937"
             "\U00010000-\U0010ffff"
-            "]+", 
+            "]+",
             flags=re.UNICODE
         )
         metadata["emojis"] = emoji_pattern.findall(text)
-        
+
         # 清洗文本
         cleaned = self.clean(text)
         cleaned = self.normalize_variants(cleaned)
-        
+
+        logger.debug(
+            f"Text cleaned: mentions={len(metadata['mentions'])} hashtags={len(metadata['hashtags'])} "
+            f"urls={len(metadata['urls'])} emojis={len(metadata['emojis'])}"
+        )
+
         return cleaned, metadata
 
 

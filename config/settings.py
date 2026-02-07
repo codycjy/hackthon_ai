@@ -39,7 +39,7 @@ class FilterConfig:
     thresholds: Dict[FilterStrictness, Dict] = None
 
     #api_key
-    kimi_api_key = "k-gF7hiU9IuKttaT2Q77YovdVUaXwENXNK3cNtWVneIrRjDIqU"
+    gemini_api_key = None
     
     def __post_init__(self):
         self.thresholds = {
